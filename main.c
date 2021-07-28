@@ -41,6 +41,26 @@ struct line *lines_last;
 bool ismousedown;
 SDL_Point mousedown;
 
+DrawArch( int r ){
+  int y=0;
+  int x=r;
+  float d=0;
+  putpixel(x,y,A);
+  while( x>y ){
+       y++;
+       if( DC(r,y) < d ) x--;
+       putpixel(x,   y, A*(1-DC(R,y) );
+       putpixel(x-1, y, A*   DC(R,y) );
+       d = DC(r,y)
+  }
+ }
+ 
+//Distance to ceil:
+double DC(int r, int y){
+  double x = Math.sqrt(r*r-y*y);
+  return Math.ceil(x) - x;
+}
+
 // This is not efficient
 void
 draw_circle(int x, int y, int radius)
@@ -227,9 +247,50 @@ avg9(Uint32 a, Uint32 b, Uint32 c, Uint32 d, Uint32 e, Uint32 f, Uint32 g, Uint3
 	return (alpha << 24) + (blue << 16) + (green << 8) + red;
 }
 
-#define PF_RGBA32 SDL_PIXELFORMAT_RGBA32
+// assumes RGBA8888
+Uint32 *
+smooth(Uint32 *old, int w, int h)
+{
+	int p = w*4;
+	SDL_Log("size: %d", h*p);
+	Uint32 *new = calloc(1, h*p);
+	if (new == NULL)
+		return NULL;
+	// we could use a rolling thing for efficiency
+	// corners
+	new[0]           = avg4(old[0], old[1], old[w], old[w+1]);
+	new[w-1]         = avg4(old[w-1], old[w-2], old[w+w-1], old[w+w-2]);
+	new[w*(h-1)]     = avg4(old[w*(h-1)], old[w*(h-1)+1], old[w*(h-2)], old[w*(h-2)+1]);
+	new[w*(h-1)+w-1] = avg4(old[w*(h-1)], old[w*(h-1)+1], old[w*(h-2)], old[w*(h-2)+1]);
 
-const struct SDL_Rect dropper_srcrect = { 0, 0, 2*BALL_RADIUS + 10, 2*BALL_RADIUS + 10 };
+	// tow and bottom edges
+	for (int i = 1; i < w - 1; i++) {
+		new[i] = avg6(old[i-1], old[i], old[i+1], old[w+i-1], old[w+i], old[w+i+1]);
+		new[w*(h-1)+i] = avg6(old[w*(h-1)+i-1], old[w*(h-1)+i], old[w*(h-1)+i+1], old[w*(h-2)+i-1], old[w*(h-2)+i], old[w*(h-2)+i+1]);
+	}
+
+	// left and right edges
+	for (int i = 1; i < h - 1; i++) {
+		new[w*i] = avg6(old[w*(i-1)], old[w*i], old[w*(i+1)], old[1+w*(i-1)], old[1+w*i], old[1+w*(i+1)]);
+		new[w-1+w*i] = avg6(old[w*(i-1)+w-1], old[w*i+w-1], old[w*(i+1)+w-1], old[w*(i-1)+w-2], old[w*i+w-2], old[w*(i+1)+w-2]);
+	}
+	
+	// middle
+	for (int i = 1; i < w - 1; i++) {
+		for (int j = 1; j < h - 1; j++) {
+			new[w*j+i] = avg9(old[w*(j-1)+i-1], old[w*(j-1)+i], old[w*(j-1)+i+1],
+                              old[w*j+i-1],     old[w*j+i],     old[w*j+i+1],
+                              old[w*(j+1)+i-1], old[w*(j+1)+i], old[w*(j+1)+i+1]);
+		}
+	}
+
+	free(old);
+	return new;
+}
+
+#define PF_RGBA32 SDL_PIXELFORMAT_RGBA8888
+
+const struct SDL_Rect dropper_srcrect = { 0, 0, 2*BALL_RADIUS + 10 + 2, 2*BALL_RADIUS + 10 + 3};
 SDL_Texture *
 render_dropper()
 {
@@ -240,7 +301,7 @@ render_dropper()
 		goto err1;
 	}
 
-	Uint32 *pixels = malloc(dropper_srcrect.w * dropper_srcrect.h * 4);
+	Uint32 *pixels = calloc(1, dropper_srcrect.w * dropper_srcrect.h * 4);
 	if (pixels == NULL) {
 		SDL_Log("%s: pixels couldn't be allocated", __func__);
 		goto err2;
@@ -254,7 +315,14 @@ render_dropper()
 	SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
 	draw_circle(BALL_RADIUS + 5, BALL_RADIUS + 5, BALL_RADIUS);
 	
-	SDL_RenderReadPixels(ren, &dropper_srcrect, PF_RGBA32, pixels, pitch);
+	if (!SDL_RenderReadPixels(ren, &dropper_srcrect, PF_RGBA32, pixels, pitch)) {
+		SDL_Log("%s: render read pixels failed", __func__);
+	}
+	pixels = smooth(pixels, dropper_srcrect.w, dropper_srcrect.h);
+	if (pixels == NULL) {
+		SDL_Log("%s: smoothing failed", __func__);
+		goto err3;
+	}
 	SDL_UpdateTexture(tex, &dropper_srcrect, pixels, pitch);
 	
 	return tex;
