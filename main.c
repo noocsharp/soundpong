@@ -41,24 +41,43 @@ struct line *lines_last;
 bool ismousedown;
 SDL_Point mousedown;
 
-DrawArch( int r ){
-  int y=0;
-  int x=r;
-  float d=0;
-  putpixel(x,y,A);
-  while( x>y ){
-       y++;
-       if( DC(r,y) < d ) x--;
-       putpixel(x,   y, A*(1-DC(R,y) );
-       putpixel(x-1, y, A*   DC(R,y) );
-       d = DC(r,y)
-  }
- }
- 
-//Distance to ceil:
-double DC(int r, int y){
-  double x = Math.sqrt(r*r-y*y);
-  return Math.ceil(x) - x;
+void
+draw_circle_aa(Uint32 *pixels, int w, int h, int radius)
+{
+	double x, y, frac;
+	int xi, yi;
+	int al1, al2;
+	int ffd = round(radius / sqrt(2));
+	for (int i = 0; i <= ffd; i++) {
+		y = sqrt(radius*radius - i*i);
+		yi = y;
+		frac = y - floor(y);
+		al2 = 0xff*frac;
+		al1 = 0xff*(1-frac);
+		pixels[(yi+h/2)*w + i+w/2] = 0xFFFFFF00 + al1;
+		pixels[(yi+h/2+1)*w + i+w/2] = 0xFFFFFF00 + al2;
+		pixels[(h/2-yi)*w + i+w/2] = 0xFFFFFF00 + al1;
+		pixels[(h/2-yi-1)*w + i+w/2] = 0xFFFFFF00 + al2;
+		pixels[(h/2-yi)*w + w/2 - i] = 0xFFFFFF00 + al1;
+		pixels[(h/2-yi-1)*w + w/2 - i] = 0xFFFFFF00 + al2;
+		pixels[(h/2+yi)*w + w/2 - i] = 0xFFFFFF00 + al1;
+		pixels[(h/2+yi+1)*w + w/2 - i] = 0xFFFFFF00 + al2;
+	}
+	for (int i = 0; i <= ffd; i++) {
+		x = sqrt(radius*radius - i*i);
+		xi = x;
+		frac = x - floor(x);
+		al1 = 0xff*frac;
+		al2 = 0xff*(1-frac);
+		pixels[(i+h/2)*w + w/2 + xi] = 0xFFFFFF00 + al2;
+		pixels[(i+h/2)*w + w/2 + xi+1] = 0xFFFFFF00 + al1;
+		pixels[(h/2-i)*w + w/2 + xi] = 0xFFFFFF00 + al2;
+		pixels[(h/2-i)*w + w/2 + xi+1] = 0xFFFFFF00 + al1;
+		pixels[(h/2-i)*w + w/2 - xi] = 0xFFFFFF00 + al2;
+		pixels[(h/2-i)*w + w/2 - xi-1] = 0xFFFFFF00 + al1;
+		pixels[(h/2+i)*w + w/2 - xi] = 0xFFFFFF00 + al2;
+		pixels[(h/2+i)*w + w/2 - xi-1] = 0xFFFFFF00 + al1;
+	}
 }
 
 // This is not efficient
@@ -67,23 +86,31 @@ draw_circle(int x, int y, int radius)
 {
 	SDL_Point start;
 	SDL_Point end;
+	Uint8 r, g, b, a;
+	SDL_GetRenderDrawColor(ren, &r, &g, &b, &a);
 
 	bool started = false;
+	double rx, frac;
+	int ix;
 	for (int i = -radius; i <= radius; i++) {
-		start.x = end.x = i + x;
-		for (int j = -radius; j <= radius; j++) {
-			if (!started && i*i + j*j <= radius*radius) {
-				start.y = j + y;
-				started = true;
-			}
+		start.y = end.y = i;
+		rx = sqrt(radius*radius - i*i);
+		ix = sqrt(radius*radius - i*i);
+		start.x = -sqrt(radius*radius - i*i);
+		end.x = sqrt(radius*radius - i*i);
+		SDL_Log("start, end: %d, %d", start.x, end.x);
+		frac = rx - ix;
 
-			if (started && i*i + j*j > radius*radius) {
-				end.y = j + y;
-				break;
-			}
-		}
+		SDL_SetRenderDrawColor(ren, r, g, b, a);
+		SDL_RenderDrawLine(ren, x + start.x, y + start.y, x + end.x, y + end.y);
+	
+		// antialiasing
+		SDL_SetRenderDrawColor(ren, r, g, b, a*frac);
+		SDL_RenderDrawPoint(ren, x + start.x-1, y + start.y);
+		SDL_RenderDrawPoint(ren, x + start.y, y + start.x-1);
+		SDL_RenderDrawPoint(ren, x + end.x+1, y + end.y);
+		SDL_RenderDrawPoint(ren, x + end.y, y + end.x+1);
 		started = false;
-		SDL_RenderDrawLine(ren, start.x, start.y, end.x, end.y);
 	}
 }
 
@@ -306,23 +333,14 @@ render_dropper()
 		SDL_Log("%s: pixels couldn't be allocated", __func__);
 		goto err2;
 	}
-
+	
 	SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
 	SDL_RenderClear(ren);
-
 	SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
-	draw_circle(BALL_RADIUS + 5, BALL_RADIUS + 5, BALL_RADIUS + 5);
-	SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-	draw_circle(BALL_RADIUS + 5, BALL_RADIUS + 5, BALL_RADIUS);
-	
-	if (!SDL_RenderReadPixels(ren, &dropper_srcrect, PF_RGBA32, pixels, pitch)) {
-		SDL_Log("%s: render read pixels failed", __func__);
-	}
-	pixels = smooth(pixels, dropper_srcrect.w, dropper_srcrect.h);
-	if (pixels == NULL) {
-		SDL_Log("%s: smoothing failed", __func__);
-		goto err3;
-	}
+	draw_circle(BALL_RADIUS + 5, BALL_RADIUS + 5, BALL_RADIUS + 4);
+	SDL_RenderReadPixels(ren, &dropper_srcrect, PF_RGBA32, pixels, pitch);
+	SDL_Log("%08x%08x%08x%08x", pixels[0], pixels[1], pixels[2], pixels[3]);
+
 	SDL_UpdateTexture(tex, &dropper_srcrect, pixels, pitch);
 	
 	return tex;
@@ -362,12 +380,15 @@ main(int argc, char *argv[])
 		goto err2;
 	}
 	
+	SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+	
 	SDL_Texture *dropper_texture = render_dropper();
 	if (dropper_texture == NULL) {
 		SDL_Log("Unable to create dropper texture: %s", SDL_GetError());
 		goto err3;
 	}
-	
+	SDL_SetTextureBlendMode(dropper_texture, SDL_BLENDMODE_BLEND);
+
 	dropper_dstrect = (SDL_Rect){ dropper.x - (BALL_RADIUS + 5), dropper.y - (BALL_RADIUS + 5), 2*BALL_RADIUS+10 + 1, 2*BALL_RADIUS+10 + 1 };
 	balltimer = SDL_AddTimer(DROPRATE, setdropball, &dropball);
 
@@ -428,7 +449,7 @@ main(int argc, char *argv[])
 			
 			ball_update(ball, delta);
 			
-			draw_circle(ball->x, ball->y, BALL_RADIUS);
+			//draw_circle(ball->x, ball->y, BALL_RADIUS);
 		}
 		
 		if (ismousedown)
