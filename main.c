@@ -20,7 +20,7 @@ struct {
 } dropper = { .x = 50, .y = 50 };
 
 struct ball {
-	int x, y;
+	float x, y;
 	float vx, vy;
 	struct ball *next;
 	struct ball *prev;
