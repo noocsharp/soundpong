@@ -1,12 +1,22 @@
+#include <fluidsynth.h>
 #include <SDL2/SDL.h>
 #include <stdbool.h>
+#include "SDL2_gfxPrimitives.h"
 #include <stdio.h>
 
-#define BALL_RADIUS 30
+#define BALL_RADIUS 11
 #define DROPRATE 2000
-#define MINLENGTH 10
+#define MINLENGTH 20
 
-const float rate = .05;
+#ifdef SDL_Log
+#undef SDL_log
+#define SDL_Log do {} while(0);
+#endif
+
+#define LOWEST 45
+#define HIGHEST 100
+
+const float rate = .01;
 const float G = 1;
 
 struct SDL_Rect screenrect = { 0, 0, 500, 1000 };
@@ -15,9 +25,11 @@ struct SDL_MouseMotionEvent mousestate;
 SDL_Renderer *ren;
 bool dropball;
 
+fluid_synth_t *fsynth;
+
 struct {
 	int x, y;
-} dropper = { .x = 50, .y = 50 };
+} dropper = { .x = 100, .y = 100 };
 
 struct ball {
 	float x, y;
@@ -42,72 +54,81 @@ struct line *lines_last;
 bool ismousedown;
 SDL_Point mousedown;
 
-// This is not efficient
-void
-draw_circle(int x, int y, int radius)
+#define MAX(a, b) ((a) < (b) ? (b) : (a))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define BETWEEN(x, a, b) (((x) <= MAX((a), (b))) && (x >= MIN((a), (b))))
+#define INRADIUS(a, b, c) ((a)*(a) + (b)*(b) <= (c)*(c))
+
+SDL_Point
+ball_intersects_line(struct ball *ball, struct line *line)
 {
-	SDL_Point start;
-	SDL_Point end;
-	Uint8 r, g, b, a;
-	SDL_GetRenderDrawColor(ren, &r, &g, &b, &a);
+	/* we calculate the distance from  the center of the ball to the line*/
+	float a = -(line->end.y - line->start.y);
+	float b = line->end.x - line->start.x;
+	float c = line->start.x*(line->end.y - line->start.y) - line->start.y*(line->end.x - line->start.x);
+	float x = (b*(b*ball->x - a*ball->y) - a*c) / (a*a + b*b);
+	float y = (a*(-b*ball->x + a*ball->y) - b*c) / (a*a + b*b);
+	float dist = fabsf(a*ball->x + b*ball->y + c) / sqrtf(a*a+b*b);
 
-	bool started = false;
-	double rx, frac;
-	int ix;
-	for (int i = -radius; i <= radius; i++) {
-		start.y = end.y = i;
-		rx = sqrt(radius*radius - i*i);
-		ix = sqrt(radius*radius - i*i);
-		start.x = -sqrt(radius*radius - i*i);
-		end.x = sqrt(radius*radius - i*i);
-		frac = rx - ix;
-
-		SDL_SetRenderDrawColor(ren, r, g, b, a);
-		SDL_RenderDrawLine(ren, x + start.x, y + start.y, x + end.x, y + end.y);
-	
-		// antialiasing
-		SDL_SetRenderDrawColor(ren, r, g, b, a*frac);
-		SDL_RenderDrawPoint(ren, x + start.x-1, y + start.y);
-		SDL_RenderDrawPoint(ren, x + start.y, y + start.x-1);
-		SDL_RenderDrawPoint(ren, x + end.x+1, y + end.y);
-		SDL_RenderDrawPoint(ren, x + end.y, y + end.x+1);
-		started = false;
+	/* if the distance between the center of the circle and the intersection is less
+	 * than the radius, then the line and circle intersect AND the intersection is on
+	 * the finite segment */
+	if (BETWEEN(x, line->start.x, line->end.x) && BETWEEN(y, line->start.y, line->end.y)) {
+		if (dist <= BALL_RADIUS)
+			return (SDL_Point){x, y};
+	} else { // otherwise check if the endpoints intersect
+		if (INRADIUS(ball->x - line->start.x, ball->y - line->start.y, BALL_RADIUS))
+			return (SDL_Point){line->start.x, line->start.y};
+		if (INRADIUS(ball->x - line->end.x, ball->y - line->end.y, BALL_RADIUS))
+			return (SDL_Point){line->end.x, line->end.y};
 	}
+
+	return (SDL_Point){-1, -1};
 }
+
+#define DEG(x) (180*((x)/M_PI))
+
+void
+play_vec(float vx, float vy)
+{
+	int val = sqrt(vx*vx + vy*vy) / 2 + LOWEST;
+	if (fluid_synth_noteon(fsynth, 0, val, 50) == FLUID_FAILED)
+	fluid_synth_noteoff(fsynth, 0, val);
+}
+
+bool
+ball_bounce(struct ball *ball, struct line *line)
+{
+	float vx = ball->vx, vy = ball->vy;
+	SDL_Point i = ball_intersects_line(ball, line);
+	if (i.x < 0 && i.y < 0)
+		return false;
+
+	play_vec(vx, vy);
+
+	// if we intersect and endpoint, just bounce in the opposite direction
+	if ((i.x == line->start.x && i.y == line->start.y) || (i.x == line->end.x && i.y == line->end.y)) {
+		ball->vx = -ball->vx;
+		ball->vy = -ball->vy;
+		return true;
+	}
+
+	float dy = line->end.y - line->start.y;
+	float dx = line->end.x - line->start.x;
+	float nx = dy/sqrt(dx*dx + dy*dy), ny = -dx/sqrt(dx*dx + dy*dy);
+	float coef = (vx * nx + vy * ny) / (nx*nx + ny*ny);
+	float ux = coef * nx;
+	float uy = coef * ny;
+	float wx = vx - ux;
+	float wy = vy - uy;
+	ball->vx = wx - ux;
+	ball->vy = wy - uy;
+	return true;
+}
+
 #define PF_RGBA32 SDL_PIXELFORMAT_RGBA8888
 
 const SDL_Point zero = {0, 0};
-
-void
-draw_line(struct line line)
-{
-	int w = abs(line.start.x - line.end.x);
-	int h = abs(line.start.y - line.end.y);
-	int len = sqrt(w*w +h*h);
-	double angle = 180*atan(((double) h)/w)/M_PI;
-
-	if (line.start.y > line.end.y)
-		angle = -angle;
-
-	if (line.start.x > line.end.x)
-		angle = 180 - angle;
-
-	SDL_Rect src = {0, 0, len, 5};
-	SDL_Rect dest = {line.start.x, line.start.y, len, 2};
-	SDL_Texture *tex = SDL_CreateTexture(ren, PF_RGBA32, SDL_TEXTUREACCESS_TARGET, src.w, src.h);
-	if (tex == NULL) {
-		SDL_Log("%s warning: failed to create texture", __func__);
-		return;
-	}
-
-	SDL_SetRenderTarget(ren, tex);
-	SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
-	SDL_RenderClear(ren);
-
-	SDL_SetRenderTarget(ren, NULL);
-	SDL_RenderCopyEx(ren, tex, NULL, &dest, angle, &zero, SDL_FLIP_NONE);
-	SDL_DestroyTexture(tex);
-}
 
 void *
 xcalloc(int size)
@@ -177,17 +198,28 @@ line_del(struct line *line)
 void
 ball_del(struct ball *ball)
 {
+	if (ball == NULL)
+		return;
+	if (ball->next == NULL && ball->prev == NULL) {
+		balls_first = balls_last = NULL;
+		free(ball);
+		return;
+	}
+
 	if (ball == balls_first) {
 		balls_first = balls_first->next;
+		balls_first->prev = NULL;
 	} else {
 		ball->prev->next = ball->next;
 	}
 
 	if (ball == balls_last) {
 		balls_last = balls_last->prev;
+		balls_last->next = NULL;
 	} else {
 		ball->next->prev = ball->prev;
 	}
+
 	free(ball);
 }
 
@@ -209,45 +241,6 @@ setdropball(unsigned int interval, void *param)
 	return interval;
 }
 
-
-const struct SDL_Rect dropper_srcrect = { 0, 0, 2*BALL_RADIUS + 10 + 2, 2*BALL_RADIUS + 10 + 3};
-SDL_Texture *
-render_dropper()
-{
-	int pitch = SDL_BYTESPERPIXEL(PF_RGBA32)*dropper_srcrect.w;
-	SDL_Texture *tex = SDL_CreateTexture(ren, PF_RGBA32, SDL_TEXTUREACCESS_STATIC, dropper_srcrect.w, dropper_srcrect.h);
-	if (tex == NULL) {
-		SDL_Log("%s: couldn't create texture: %s", __func__, SDL_GetError());
-		goto err1;
-	}
-
-	Uint32 *pixels = calloc(1, dropper_srcrect.w * dropper_srcrect.h * 4);
-	if (pixels == NULL) {
-		SDL_Log("%s: pixels couldn't be allocated", __func__);
-		goto err2;
-	}
-	
-	SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
-	draw_circle(BALL_RADIUS + 5, BALL_RADIUS + 5, BALL_RADIUS + 5);
-	SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-	draw_circle(BALL_RADIUS + 5, BALL_RADIUS + 5, BALL_RADIUS);
-	SDL_RenderReadPixels(ren, &dropper_srcrect, PF_RGBA32, pixels, pitch);
-	SDL_Log("%08x%08x%08x%08x", pixels[0], pixels[1], pixels[2], pixels[3]);
-
-	SDL_UpdateTexture(tex, &dropper_srcrect, pixels, pitch);
-	
-	return tex;
-	
-err3:
-	SDL_DestroyTexture(tex);
-	tex = NULL;
-err2:
-	free(pixels);
-err1:
-	return NULL;
-}
-
-SDL_Rect dropper_dstrect;
 int
 main(int argc, char *argv[])
 {
@@ -255,8 +248,12 @@ main(int argc, char *argv[])
 	unsigned int then, now, delta;
 	SDL_TimerID balltimer;
 	SDL_Rect ballrect;
+	fluid_settings_t *fsettings;
+	fluid_audio_driver_t *fadriver;
+	int sfid;
+	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
 
-	if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER) != 0) {
+	if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER|SDL_INIT_AUDIO) != 0) {
 		SDL_Log("Unable to initialize SDL: %s", SDL_GetError());
 		return 1;
 	}
@@ -266,25 +263,54 @@ main(int argc, char *argv[])
 		SDL_Log("Unable to create window: %s", SDL_GetError());
 		goto err1;
 	}
+
+	fsettings = new_fluid_settings();
+	if (!fsettings) {
+		SDL_Log("Unable to create fluid settings");
+		goto err2;
+	}
+
+	fsynth = new_fluid_synth(fsettings);
+	if (!fsynth) {
+		SDL_Log("Unable to create fluid synth");
+		goto err3;
+	}
 	
+	if ((sfid = fluid_synth_sfload(fsynth, "/home/nihal/instruments/soundfonts/free/Xylophone-MediumMallets-SF2-20200706/Xylophone-MediumMallets-20200706.sf2", true)) == FLUID_FAILED) {
+		SDL_Log("Unable to load soundfont");
+		goto err4;
+	}
+
+	fluid_sfont_t *sfont = fluid_synth_get_sfont_by_id(fsynth, sfid);
+	if (sfont == NULL) {
+		SDL_Log("coudn't load sfont by id");
+		return 1;
+	}
+
+	fluid_sfont_iteration_start(sfont);
+	fluid_preset_t *fpreset = fluid_sfont_iteration_next(sfont);
+	int bank = fluid_preset_get_banknum(fpreset);
+	int prog = fluid_preset_get_num(fpreset);
+	fluid_synth_activate_tuning(fsynth, 0, bank, prog, true);
+
+	fluid_settings_setstr(fsettings, "audio.driver", "sdl2");
+	fadriver = new_fluid_audio_driver(fsettings, fsynth);
+	if (!fadriver) {
+		SDL_Log("Unable to create fluid synth driver");
+		goto err5;
+	}
+
 	ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
 	if (ren == NULL) {
 		SDL_Log("Unable to create renderer: %s", SDL_GetError());
-		goto err2;
+		goto err6;
 	}
 	
 	SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-	
-	SDL_Texture *dropper_texture = render_dropper();
-	if (dropper_texture == NULL) {
-		SDL_Log("Unable to create dropper texture: %s", SDL_GetError());
-		goto err3;
-	}
-	SDL_SetTextureBlendMode(dropper_texture, SDL_BLENDMODE_BLEND);
 
-	dropper_dstrect = (SDL_Rect){ dropper.x - (BALL_RADIUS + 5), dropper.y - (BALL_RADIUS + 5), 2*BALL_RADIUS+10, 2*BALL_RADIUS+10 };
 	balltimer = SDL_AddTimer(DROPRATE, setdropball, &dropball);
 
+	then = SDL_GetTicks();
 	running = true;
 	SDL_Event e;
 	while (running) {
@@ -337,6 +363,11 @@ main(int argc, char *argv[])
 				continue;
 			}
 
+			for (struct line *line = lines_first; line != NULL; line = line->next) {
+				if (ball_bounce(ball, line)) // returns true if it has bounced, can only bounce off of one line.
+					break;
+			}
+
 			ball_update(ball, delta);
 		}
 
@@ -344,19 +375,23 @@ main(int argc, char *argv[])
 		SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
 		SDL_RenderClear(ren);
 
-		SDL_RenderCopy(ren, dropper_texture, &dropper_srcrect, &dropper_dstrect);
+		aaFilledEllipseColor(ren, dropper.x, dropper.y, BALL_RADIUS + 5, BALL_RADIUS + 5, 0xFFFFFFFF);
+		aaFilledEllipseColor(ren, dropper.x, dropper.y, BALL_RADIUS, BALL_RADIUS, 0xFF000000);
 
 		SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
 
 		for (struct line *line = lines_first; line != NULL; line = line->next) {
-			draw_line(*line);
+			thickLineColor(ren, line->start.x, line->start.y, line->end.x, line->end.y, 3, 0xFFFFFFFF);
 		}
 
-		if (ismousedown)
-			SDL_RenderDrawLine(ren, mousedown.x, mousedown.y, e.button.x, e.button.y);
+		if (ismousedown) {
+			aalineColor(ren, mousedown.x, mousedown.y-2, e.button.x, e.button.y-2, 0xFFFFFFFF);
+			aalineColor(ren, mousedown.x, mousedown.y+2, e.button.x, e.button.y+2, 0xFFFFFFFF);
+			thickLineColor(ren, mousedown.x, mousedown.y, e.button.x, e.button.y, 3, 0xFFFFFFFF);
+		}
 
 		for (struct ball *ball = balls_first; ball != NULL; ball = ball->next) {
-			draw_circle(ball->x, ball->y, BALL_RADIUS);
+			aaFilledEllipseColor(ren, ball->x, ball->y, BALL_RADIUS, BALL_RADIUS, 0xFFFFFFFF);
 		}
 
 		SDL_RenderPresent(ren);
@@ -364,9 +399,16 @@ main(int argc, char *argv[])
 
 	SDL_RemoveTimer(balltimer);
 
-	SDL_DestroyTexture(dropper_texture);
-err3:
+err7:
 	SDL_DestroyRenderer(ren);
+err6:
+	delete_fluid_audio_driver(fadriver);
+err5:
+	fluid_synth_sfunload(fsynth, sfid, true);
+err4:
+	delete_fluid_synth(fsynth);
+err3:
+	delete_fluid_settings(fsettings);
 err2:
 	SDL_DestroyWindow(win);
 err1:
