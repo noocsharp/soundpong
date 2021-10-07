@@ -27,9 +27,8 @@ bool dropball;
 
 fluid_synth_t *fsynth;
 
-struct {
-	int x, y;
-} dropper = { .x = 100, .y = 100 };
+SDL_Point dropper = { .x = 100, .y = 100 };
+SDL_Point old_dropper;
 
 struct ball {
 	float x, y;
@@ -47,6 +46,8 @@ struct line {
 	struct line *next;
 	struct line *prev;
 };
+
+SDL_Point *selected;
 
 struct line *lines_first;
 struct line *lines_last;
@@ -326,8 +327,13 @@ main(int argc, char *argv[])
 				break;
 			case SDL_MOUSEBUTTONUP:
 				ismousedown = false;
-				if ((mousedown.x - e.button.x)*(mousedown.x - e.button.x) + (mousedown.y - e.button.y)*(mousedown.y - e.button.y) > MINLENGTH*MINLENGTH)
+				if (selected) {
+					selected->x = e.button.x;
+					selected->y = e.button.y;
+					selected = NULL;
+				} else if (!INRADIUS(mousedown.x - e.button.x, mousedown.y - e.button.y, MINLENGTH)) {
 					line_add(mousedown.x, mousedown.y, e.button.x, e.button.y);
+				}
 				break;
 			case SDL_QUIT:
 				running = false;
@@ -375,18 +381,42 @@ main(int argc, char *argv[])
 		SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
 		SDL_RenderClear(ren);
 
+		if (ismousedown && !selected && INRADIUS(dropper.x - mousedown.x, dropper.y - mousedown.y, BALL_RADIUS + 5)) {
+			selected = &dropper;
+			old_dropper.x = dropper.x;
+			old_dropper.y = dropper.y;
+			dropper.x = e.button.x;
+			dropper.y = e.button.y;
+		} else if (ismousedown && selected == &dropper && INRADIUS(old_dropper.x - mousedown.x, old_dropper.y - mousedown.y, BALL_RADIUS + 5)) {
+			dropper.x = e.button.x;
+			dropper.y = e.button.y;
+		}
+
 		aaFilledEllipseColor(ren, dropper.x, dropper.y, BALL_RADIUS + 5, BALL_RADIUS + 5, 0xFFFFFFFF);
 		aaFilledEllipseColor(ren, dropper.x, dropper.y, BALL_RADIUS, BALL_RADIUS, 0xFF000000);
 
 		SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
 
 		for (struct line *line = lines_first; line != NULL; line = line->next) {
+			if (ismousedown) {
+				if (INRADIUS(line->start.x - mousedown.x, line->start.y - mousedown.y, 5)) {
+					selected = &line->start;
+				} else if (INRADIUS(line->end.x - mousedown.x, line->end.y - mousedown.y, 5)) {
+					selected = &line->end;
+				}
+			}
+
+			if (selected == &line->start) {
+				line->start.x = e.button.x;
+				line->start.y = e.button.y;
+			} else if (selected == &line->end) {
+				line->end.x = e.button.x;
+				line->end.y = e.button.y;
+			}
 			thickLineColor(ren, line->start.x, line->start.y, line->end.x, line->end.y, 3, 0xFFFFFFFF);
 		}
 
-		if (ismousedown) {
-			aalineColor(ren, mousedown.x, mousedown.y-2, e.button.x, e.button.y-2, 0xFFFFFFFF);
-			aalineColor(ren, mousedown.x, mousedown.y+2, e.button.x, e.button.y+2, 0xFFFFFFFF);
+		if (ismousedown && !selected) {
 			thickLineColor(ren, mousedown.x, mousedown.y, e.button.x, e.button.y, 3, 0xFFFFFFFF);
 		}
 
