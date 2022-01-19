@@ -1,4 +1,6 @@
+#ifdef SOUND
 #include <fluidsynth.h>
+#endif
 #include <SDL2/SDL.h>
 #include <stdbool.h>
 #include "SDL2_gfxPrimitives.h"
@@ -20,7 +22,9 @@ struct SDL_MouseMotionEvent mousestate;
 SDL_Renderer *ren;
 bool dropball;
 
+#ifdef SOUND
 fluid_synth_t *fsynth;
+#endif
 
 SDL_Point dropper = { .x = 100, .y = 100 };
 SDL_Point old_dropper;
@@ -90,8 +94,10 @@ void
 play_vec(float vx, float vy)
 {
 	int val = sqrt(vx*vx + vy*vy) / 2 + LOWEST;
+#ifdef SOUND
 	if (fluid_synth_noteon(fsynth, 0, val, 50) == FLUID_FAILED)
 	fluid_synth_noteoff(fsynth, 0, val);
+#endif
 }
 
 bool
@@ -246,8 +252,10 @@ main(int argc, char *argv[])
 	unsigned int then, now, delta;
 	SDL_TimerID balltimer;
 	SDL_Rect ballrect;
+#ifdef SOUND
 	fluid_settings_t *fsettings;
 	fluid_audio_driver_t *fadriver;
+#endif
 	int sfid;
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
 
@@ -262,6 +270,7 @@ main(int argc, char *argv[])
 		goto err1;
 	}
 
+#ifdef SOUND
 	fsettings = new_fluid_settings();
 	if (!fsettings) {
 		SDL_Log("Unable to create fluid settings");
@@ -297,6 +306,7 @@ main(int argc, char *argv[])
 		SDL_Log("Unable to create fluid synth driver");
 		goto err5;
 	}
+#endif
 
 	ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
 	if (ren == NULL) {
@@ -451,6 +461,7 @@ main(int argc, char *argv[])
 err7:
 	SDL_DestroyRenderer(ren);
 err6:
+#ifdef SOUND
 	delete_fluid_audio_driver(fadriver);
 err5:
 	fluid_synth_sfunload(fsynth, sfid, true);
@@ -459,6 +470,7 @@ err4:
 err3:
 	delete_fluid_settings(fsettings);
 err2:
+#endif
 	SDL_DestroyWindow(win);
 err1:
 	SDL_Quit();
