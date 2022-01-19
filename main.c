@@ -8,11 +8,6 @@
 #define DROPRATE 2000
 #define MINLENGTH 20
 
-#ifdef SDL_Log
-#undef SDL_log
-#define SDL_Log do {} while(0);
-#endif
-
 #define LOWEST 45
 #define HIGHEST 100
 
