@@ -274,7 +274,7 @@ main(int argc, char *argv[])
 		goto err3;
 	}
 	
-	if ((sfid = fluid_synth_sfload(fsynth, "/home/nihal/instruments/soundfonts/free/Xylophone-MediumMallets-SF2-20200706/Xylophone-MediumMallets-20200706.sf2", true)) == FLUID_FAILED) {
+	if ((sfid = fluid_synth_sfload(fsynth, "Xylophone-MediumMallets-20200706.sf2", true)) == FLUID_FAILED) {
 		SDL_Log("Unable to load soundfont");
 		goto err4;
 	}
