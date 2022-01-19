@@ -43,12 +43,14 @@ struct line {
 };
 
 SDL_Point *selected;
+struct line *selected_line;
 
 struct line *lines_first;
 struct line *lines_last;
 
 bool ismousedown;
 SDL_Point mousedown;
+SDL_Point mousepos;
 
 #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -314,18 +316,30 @@ main(int argc, char *argv[])
 			switch (e.type) {
 			case SDL_MOUSEMOTION:
 				mousestate = e.motion;
+				mousepos.x = e.motion.x;
+				mousepos.y = e.motion.y;
 				break;
 			case SDL_MOUSEBUTTONDOWN:
 				ismousedown = true;
 				mousedown.x = e.button.x;
 				mousedown.y = e.button.y;
+				mousepos.x = e.button.x;
+				mousepos.y = e.button.y;
 				break;
 			case SDL_MOUSEBUTTONUP:
 				ismousedown = false;
+				mousepos.x = e.button.x;
+				mousepos.y = e.button.y;
 				if (selected) {
-					selected->x = e.button.x;
-					selected->y = e.button.y;
-					selected = NULL;
+					if (INRADIUS(selected_line->start.x - selected_line->end.x, selected_line->start.y - selected_line->end.y, MINLENGTH)) {
+						line_del(selected_line);
+						selected = NULL;
+					} else {
+						selected->x = e.button.x;
+						selected->y = e.button.y;
+						selected = NULL;
+					}
+					selected_line = NULL;
 				} else if (!INRADIUS(mousedown.x - e.button.x, mousedown.y - e.button.y, MINLENGTH)) {
 					line_add(mousedown.x, mousedown.y, e.button.x, e.button.y);
 				}
@@ -376,15 +390,17 @@ main(int argc, char *argv[])
 		SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
 		SDL_RenderClear(ren);
 
-		if (ismousedown && !selected && INRADIUS(dropper.x - mousedown.x, dropper.y - mousedown.y, BALL_RADIUS + 5)) {
-			selected = &dropper;
-			old_dropper.x = dropper.x;
-			old_dropper.y = dropper.y;
-			dropper.x = e.button.x;
-			dropper.y = e.button.y;
-		} else if (ismousedown && selected == &dropper && INRADIUS(old_dropper.x - mousedown.x, old_dropper.y - mousedown.y, BALL_RADIUS + 5)) {
-			dropper.x = e.button.x;
-			dropper.y = e.button.y;
+		if (ismousedown) {
+			if (!selected && INRADIUS(dropper.x - mousedown.x, dropper.y - mousedown.y, BALL_RADIUS + 5)) {
+				selected = &dropper;
+				old_dropper.x = dropper.x;
+				old_dropper.y = dropper.y;
+				dropper.x = mousepos.x;
+				dropper.y = mousepos.y;
+			} else if (selected == &dropper && INRADIUS(old_dropper.x - mousedown.x, old_dropper.y - mousedown.y, BALL_RADIUS + 5)) {
+				dropper.x = mousepos.x;
+				dropper.y = mousepos.y;
+			}
 		}
 
 		aaFilledEllipseColor(ren, dropper.x, dropper.y, BALL_RADIUS + 5, BALL_RADIUS + 5, 0xFFFFFFFF);
@@ -393,6 +409,12 @@ main(int argc, char *argv[])
 		SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
 
 		for (struct line *line = lines_first; line != NULL; line = line->next) {
+			if (INRADIUS(line->start.x - mousepos.x, line->start.y - mousepos.y, 5)) {
+				aaFilledEllipseColor(ren, line->start.x, line->start.y, 5, 5, 0x80FFFFFF);
+			} else if (INRADIUS(line->end.x - mousepos.x, line->end.y - mousepos.y, 5)) {
+				aaFilledEllipseColor(ren, line->end.x, line->end.y, 5, 5, 0x80FFFFFF);
+			}
+
 			if (ismousedown) {
 				if (INRADIUS(line->start.x - mousedown.x, line->start.y - mousedown.y, 5)) {
 					selected = &line->start;
@@ -402,17 +424,19 @@ main(int argc, char *argv[])
 			}
 
 			if (selected == &line->start) {
-				line->start.x = e.button.x;
-				line->start.y = e.button.y;
+				line->start.x = mousepos.x;
+				line->start.y = mousepos.y;
+				selected_line = line;
 			} else if (selected == &line->end) {
-				line->end.x = e.button.x;
-				line->end.y = e.button.y;
+				line->end.x = mousepos.x;
+				line->end.y = mousepos.y;
+				selected_line = line;
 			}
 			thickLineColor(ren, line->start.x, line->start.y, line->end.x, line->end.y, 3, 0xFFFFFFFF);
 		}
 
 		if (ismousedown && !selected) {
-			thickLineColor(ren, mousedown.x, mousedown.y, e.button.x, e.button.y, 3, 0xFFFFFFFF);
+			thickLineColor(ren, mousedown.x, mousedown.y, mousepos.x, mousepos.y, 3, 0xFFFFFFFF);
 		}
 
 		for (struct ball *ball = balls_first; ball != NULL; ball = ball->next) {
