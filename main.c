@@ -275,7 +275,7 @@ loop()
 			mousepos.x = e.button.x;
 			mousepos.y = e.button.y;
 			if (selected) {
-				if (INRADIUS(selected_line->start.x - selected_line->end.x, selected_line->start.y - selected_line->end.y, MINLENGTH)) {
+				if (selected_line && INRADIUS(selected_line->start.x - selected_line->end.x, selected_line->start.y - selected_line->end.y, MINLENGTH)) {
 					line_del(selected_line);
 					selected = NULL;
 				} else {
