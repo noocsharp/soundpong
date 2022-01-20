@@ -1,6 +1,11 @@
 #ifdef SOUND
 #include <fluidsynth.h>
 #endif
+
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
+
 #include <SDL2/SDL.h>
 #include <stdbool.h>
 #include "SDL2_gfxPrimitives.h"
@@ -245,18 +250,157 @@ setdropball(unsigned int interval, void *param)
 	return interval;
 }
 
-int
-main(int argc, char *argv[])
-{
-	bool running;
-	unsigned int then, now, delta;
-	SDL_TimerID balltimer;
-	SDL_Rect ballrect;
+bool running;
+unsigned int then, now, delta;
+SDL_TimerID balltimer;
+SDL_Rect ballrect;
+
 #ifdef SOUND
 	fluid_settings_t *fsettings;
 	fluid_audio_driver_t *fadriver;
 #endif
 	int sfid;
+void
+loop()
+{
+	SDL_Event e;
+	while(SDL_PollEvent(&e)) {
+		switch (e.type) {
+		case SDL_MOUSEMOTION:
+			mousestate = e.motion;
+			mousepos.x = e.motion.x;
+			mousepos.y = e.motion.y;
+			break;
+		case SDL_MOUSEBUTTONDOWN:
+			ismousedown = true;
+			mousedown.x = e.button.x;
+			mousedown.y = e.button.y;
+			mousepos.x = e.button.x;
+			mousepos.y = e.button.y;
+			break;
+		case SDL_MOUSEBUTTONUP:
+			ismousedown = false;
+			mousepos.x = e.button.x;
+			mousepos.y = e.button.y;
+			if (selected) {
+				if (INRADIUS(selected_line->start.x - selected_line->end.x, selected_line->start.y - selected_line->end.y, MINLENGTH)) {
+					line_del(selected_line);
+					selected = NULL;
+				} else {
+					selected->x = e.button.x;
+					selected->y = e.button.y;
+					selected = NULL;
+				}
+				selected_line = NULL;
+			} else if (!INRADIUS(mousedown.x - e.button.x, mousedown.y - e.button.y, MINLENGTH)) {
+				line_add(mousedown.x, mousedown.y, e.button.x, e.button.y);
+			}
+			break;
+		case SDL_QUIT:
+			running = false;
+		case SDL_WINDOWEVENT: {
+			switch (e.window.event) {
+			case SDL_WINDOWEVENT_SIZE_CHANGED:
+			case SDL_WINDOWEVENT_RESIZED:
+				screenrect.w = e.window.data1;
+				screenrect.h = e.window.data2;
+			}
+			}
+			break;
+		}
+	}
+
+	if (dropball) {
+		dropball = false;
+		ball_add(dropper.x, dropper.y);
+	}
+
+	now = SDL_GetTicks();
+	delta = now - then;
+	if (delta < 5)
+		return;
+
+	then = now;
+
+	/* update state */
+	for (struct ball *ball = balls_first; ball != NULL; ball = ball->next) {
+		ballrect = (struct SDL_Rect){ball->x - BALL_RADIUS, ball->y - BALL_RADIUS, ball->x + BALL_RADIUS, ball->y + BALL_RADIUS};
+		if (!SDL_HasIntersection(&ballrect, &screenrect)) {
+			ball_del(ball);
+			continue;
+		}
+
+		for (struct line *line = lines_first; line != NULL; line = line->next) {
+			if (ball_bounce(ball, line)) // returns true if it has bounced, can only bounce off of one line.
+				break;
+		}
+
+		ball_update(ball, delta);
+	}
+
+	/* render */
+	SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+	SDL_RenderClear(ren);
+
+	if (ismousedown) {
+		if (!selected && INRADIUS(dropper.x - mousedown.x, dropper.y - mousedown.y, BALL_RADIUS + 5)) {
+			selected = &dropper;
+			old_dropper.x = dropper.x;
+			old_dropper.y = dropper.y;
+			dropper.x = mousepos.x;
+			dropper.y = mousepos.y;
+		} else if (selected == &dropper && INRADIUS(old_dropper.x - mousedown.x, old_dropper.y - mousedown.y, BALL_RADIUS + 5)) {
+			dropper.x = mousepos.x;
+			dropper.y = mousepos.y;
+		}
+	}
+
+	aaFilledEllipseColor(ren, dropper.x, dropper.y, BALL_RADIUS + 5, BALL_RADIUS + 5, 0xFFFFFFFF);
+	aaFilledEllipseColor(ren, dropper.x, dropper.y, BALL_RADIUS, BALL_RADIUS, 0xFF000000);
+
+	SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+
+	for (struct line *line = lines_first; line != NULL; line = line->next) {
+		if (INRADIUS(line->start.x - mousepos.x, line->start.y - mousepos.y, 5)) {
+			aaFilledEllipseColor(ren, line->start.x, line->start.y, 5, 5, 0x80FFFFFF);
+		} else if (INRADIUS(line->end.x - mousepos.x, line->end.y - mousepos.y, 5)) {
+			aaFilledEllipseColor(ren, line->end.x, line->end.y, 5, 5, 0x80FFFFFF);
+		}
+
+		if (ismousedown) {
+			if (INRADIUS(line->start.x - mousedown.x, line->start.y - mousedown.y, 5)) {
+				selected = &line->start;
+			} else if (INRADIUS(line->end.x - mousedown.x, line->end.y - mousedown.y, 5)) {
+				selected = &line->end;
+			}
+		}
+
+		if (selected == &line->start) {
+			line->start.x = mousepos.x;
+			line->start.y = mousepos.y;
+			selected_line = line;
+		} else if (selected == &line->end) {
+			line->end.x = mousepos.x;
+			line->end.y = mousepos.y;
+			selected_line = line;
+		}
+		thickLineColor(ren, line->start.x, line->start.y, line->end.x, line->end.y, 3, 0xFFFFFFFF);
+	}
+
+	if (ismousedown && !selected) {
+		thickLineColor(ren, mousedown.x, mousedown.y, mousepos.x, mousepos.y, 3, 0xFFFFFFFF);
+	}
+
+	for (struct ball *ball = balls_first; ball != NULL; ball = ball->next) {
+		aaFilledEllipseColor(ren, ball->x, ball->y, BALL_RADIUS, BALL_RADIUS, 0xFFFFFFFF);
+	}
+
+	SDL_RenderPresent(ren);
+}
+
+int
+main(int argc, char *argv[])
+{
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
 
 	if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER|SDL_INIT_AUDIO) != 0) {
@@ -282,8 +426,8 @@ main(int argc, char *argv[])
 		SDL_Log("Unable to create fluid synth");
 		goto err3;
 	}
-	
-	if ((sfid = fluid_synth_sfload(fsynth, "Xylophone-MediumMallets-20200706.sf2", true)) == FLUID_FAILED) {
+
+	if ((sfid = fluid_synth_sfload(fsynth, "assets/Xylophone-MediumMallets-20200706.sf2", true)) == FLUID_FAILED) {
 		SDL_Log("Unable to load soundfont");
 		goto err4;
 	}
@@ -313,148 +457,21 @@ main(int argc, char *argv[])
 		SDL_Log("Unable to create renderer: %s", SDL_GetError());
 		goto err6;
 	}
-	
+
 	SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
 
 	balltimer = SDL_AddTimer(DROPRATE, setdropball, &dropball);
 
 	then = SDL_GetTicks();
 	running = true;
-	SDL_Event e;
+
+#ifdef EMSCRIPTEN
+	emscripten_set_main_loop_arg(&loop, NULL, 0, 1);
+#else
 	while (running) {
-		while(SDL_PollEvent(&e)) {
-			switch (e.type) {
-			case SDL_MOUSEMOTION:
-				mousestate = e.motion;
-				mousepos.x = e.motion.x;
-				mousepos.y = e.motion.y;
-				break;
-			case SDL_MOUSEBUTTONDOWN:
-				ismousedown = true;
-				mousedown.x = e.button.x;
-				mousedown.y = e.button.y;
-				mousepos.x = e.button.x;
-				mousepos.y = e.button.y;
-				break;
-			case SDL_MOUSEBUTTONUP:
-				ismousedown = false;
-				mousepos.x = e.button.x;
-				mousepos.y = e.button.y;
-				if (selected) {
-					if (INRADIUS(selected_line->start.x - selected_line->end.x, selected_line->start.y - selected_line->end.y, MINLENGTH)) {
-						line_del(selected_line);
-						selected = NULL;
-					} else {
-						selected->x = e.button.x;
-						selected->y = e.button.y;
-						selected = NULL;
-					}
-					selected_line = NULL;
-				} else if (!INRADIUS(mousedown.x - e.button.x, mousedown.y - e.button.y, MINLENGTH)) {
-					line_add(mousedown.x, mousedown.y, e.button.x, e.button.y);
-				}
-				break;
-			case SDL_QUIT:
-				running = false;
-			case SDL_WINDOWEVENT: {
-				switch (e.window.event) {
-				case SDL_WINDOWEVENT_SIZE_CHANGED:
-				case SDL_WINDOWEVENT_RESIZED:
-					screenrect.w = e.window.data1;
-					screenrect.h = e.window.data2;
-				}
-				}
-				break;
-			}
-		}
-
-		if (dropball) {
-			dropball = false;
-			ball_add(dropper.x, dropper.y);
-		}
-
-		now = SDL_GetTicks();
-		delta = now - then;
-		if (delta < 5)
-			continue;
-
-		then = now;
-		
-		/* update state */
-		for (struct ball *ball = balls_first; ball != NULL; ball = ball->next) {
-			ballrect = (struct SDL_Rect){ball->x - BALL_RADIUS, ball->y - BALL_RADIUS, ball->x + BALL_RADIUS, ball->y + BALL_RADIUS};
-			if (!SDL_HasIntersection(&ballrect, &screenrect)) {
-				ball_del(ball);
-				continue;
-			}
-
-			for (struct line *line = lines_first; line != NULL; line = line->next) {
-				if (ball_bounce(ball, line)) // returns true if it has bounced, can only bounce off of one line.
-					break;
-			}
-
-			ball_update(ball, delta);
-		}
-
-		/* render */
-		SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-		SDL_RenderClear(ren);
-
-		if (ismousedown) {
-			if (!selected && INRADIUS(dropper.x - mousedown.x, dropper.y - mousedown.y, BALL_RADIUS + 5)) {
-				selected = &dropper;
-				old_dropper.x = dropper.x;
-				old_dropper.y = dropper.y;
-				dropper.x = mousepos.x;
-				dropper.y = mousepos.y;
-			} else if (selected == &dropper && INRADIUS(old_dropper.x - mousedown.x, old_dropper.y - mousedown.y, BALL_RADIUS + 5)) {
-				dropper.x = mousepos.x;
-				dropper.y = mousepos.y;
-			}
-		}
-
-		aaFilledEllipseColor(ren, dropper.x, dropper.y, BALL_RADIUS + 5, BALL_RADIUS + 5, 0xFFFFFFFF);
-		aaFilledEllipseColor(ren, dropper.x, dropper.y, BALL_RADIUS, BALL_RADIUS, 0xFF000000);
-
-		SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
-
-		for (struct line *line = lines_first; line != NULL; line = line->next) {
-			if (INRADIUS(line->start.x - mousepos.x, line->start.y - mousepos.y, 5)) {
-				aaFilledEllipseColor(ren, line->start.x, line->start.y, 5, 5, 0x80FFFFFF);
-			} else if (INRADIUS(line->end.x - mousepos.x, line->end.y - mousepos.y, 5)) {
-				aaFilledEllipseColor(ren, line->end.x, line->end.y, 5, 5, 0x80FFFFFF);
-			}
-
-			if (ismousedown) {
-				if (INRADIUS(line->start.x - mousedown.x, line->start.y - mousedown.y, 5)) {
-					selected = &line->start;
-				} else if (INRADIUS(line->end.x - mousedown.x, line->end.y - mousedown.y, 5)) {
-					selected = &line->end;
-				}
-			}
-
-			if (selected == &line->start) {
-				line->start.x = mousepos.x;
-				line->start.y = mousepos.y;
-				selected_line = line;
-			} else if (selected == &line->end) {
-				line->end.x = mousepos.x;
-				line->end.y = mousepos.y;
-				selected_line = line;
-			}
-			thickLineColor(ren, line->start.x, line->start.y, line->end.x, line->end.y, 3, 0xFFFFFFFF);
-		}
-
-		if (ismousedown && !selected) {
-			thickLineColor(ren, mousedown.x, mousedown.y, mousepos.x, mousepos.y, 3, 0xFFFFFFFF);
-		}
-
-		for (struct ball *ball = balls_first; ball != NULL; ball = ball->next) {
-			aaFilledEllipseColor(ren, ball->x, ball->y, BALL_RADIUS, BALL_RADIUS, 0xFFFFFFFF);
-		}
-
-		SDL_RenderPresent(ren);
+		loop();
 	}
+#endif
 
 	SDL_RemoveTimer(balltimer);
 
