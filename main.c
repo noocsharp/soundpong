@@ -242,18 +242,10 @@ ball_update(struct ball *ball, unsigned int delta)
 
 SDL_Rect result;
 
-unsigned int
-setdropball(unsigned int interval, void *param)
-{
-	bool *dropball = param;
-	*dropball = true;
-	return interval;
-}
-
 bool running;
 unsigned int then, now, delta;
-SDL_TimerID balltimer;
 SDL_Rect ballrect;
+unsigned int lastdrop;
 
 #ifdef SOUND
 	fluid_settings_t *fsettings;
@@ -310,16 +302,16 @@ loop()
 		}
 	}
 
-	if (dropball) {
-		dropball = false;
+	now = SDL_GetTicks();
+	if (now - lastdrop >= DROPRATE) {
+		printf("%u, %u\n", now, lastdrop);
 		ball_add(dropper.x, dropper.y);
+		lastdrop = now;
 	}
 
-	now = SDL_GetTicks();
 	delta = now - then;
 	if (delta < 5)
 		return;
-
 	then = now;
 
 	/* update state */
@@ -460,20 +452,16 @@ main(int argc, char *argv[])
 
 	SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
 
-	balltimer = SDL_AddTimer(DROPRATE, setdropball, &dropball);
-
 	then = SDL_GetTicks();
 	running = true;
 
 #ifdef EMSCRIPTEN
-	emscripten_set_main_loop_arg(&loop, NULL, 0, 1);
+	emscripten_set_main_loop(&loop, 0, 1);
 #else
 	while (running) {
 		loop();
 	}
 #endif
-
-	SDL_RemoveTimer(balltimer);
 
 err7:
 	SDL_DestroyRenderer(ren);
