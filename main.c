@@ -4,6 +4,13 @@
 
 #ifdef EMSCRIPTEN
 #include <emscripten.h>
+EM_JS(int, canvas_get_width, (), {
+  return window.innerWidth;
+});
+
+EM_JS(int, canvas_get_height, (), {
+  return window.innerHeight;
+});
 #endif
 
 #include <SDL2/SDL.h>
@@ -304,7 +311,6 @@ loop()
 
 	now = SDL_GetTicks();
 	if (now - lastdrop >= DROPRATE) {
-		printf("%u, %u\n", now, lastdrop);
 		ball_add(dropper.x, dropper.y);
 		lastdrop = now;
 	}
@@ -394,6 +400,13 @@ int
 main(int argc, char *argv[])
 {
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+
+#ifdef EMSCRIPTEN
+	int width, height;
+	emscripten_get_screen_size(&width, &height);
+	screenrect.w = canvas_get_width();
+	screenrect.h = canvas_get_height();
+#endif
 
 	if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER|SDL_INIT_AUDIO) != 0) {
 		SDL_Log("Unable to initialize SDL: %s", SDL_GetError());
